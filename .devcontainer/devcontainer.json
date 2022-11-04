@@ -1,0 +1,30 @@
+{
+  "name": "Debian",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  // "image": "mcr.microsoft.com/devcontainers/base:bullseye",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dotjoshjohnson.xml",
+        "esbenp.prettier-vscode",
+        "streetsidesoftware.code-spell-checker"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[javascript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        }
+      }
+    }
+  },
+  "mounts": ["target=/home/vscode/.cache,type=volume,consistency=delegated"],
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.cache",
+  "remoteUser": "vscode",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "node": { "version": "lts" }
+  }
+}
