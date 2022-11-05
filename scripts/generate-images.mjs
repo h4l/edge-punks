@@ -137,7 +137,9 @@ async function svgFileToRasterFile({
   });
   const paths = await Promise.all(
     images.map(async (image) => {
-      const format = (await image.metadata()).format;
+      // the metadata format reflects the original src image format, it's not
+      // updated after calling image.toFormat() ...
+      const format = (await image.metadata()).format === "gif" ? "gif" : "png";
       const buf = await image.toBuffer();
       const path = `${destFileWithoutExtension}.${format}`;
       fs.writeFile(path, buf);
