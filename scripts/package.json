@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "pull-data": "cd .. && node scripts/pull-on-chain-data.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/web3": "^1.2.2",
+    "es-main": "^1.2.0",
+    "p-limit": "^4.0.0",
+    "prettier": "^2.7.1",
+    "sharp": "^0.31.2",
+    "web3": "^1.8.0",
+    "yargs": "^17.6.0"
+  }
+}
