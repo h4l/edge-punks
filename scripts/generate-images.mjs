@@ -1,11 +1,14 @@
 import assert from "assert";
+import esMain from "es-main";
 import fs from "fs/promises";
 import path from "path";
-import esMain from "es-main";
 import pLimit from "p-limit";
+import sharp from "sharp";
+import { fileURLToPath } from "url";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import sharp from "sharp";
+
+const MAX_SUPPLY = 888;
 
 function decodeBinaryDataUrlB64(dataUrl) {
   return Buffer.from(dataUrl.split(",", 2)[1], "base64");
@@ -34,25 +37,65 @@ async function get1of1Meta(layerBuffers) {
   return { is1of1, format: meta.format, width: meta.width };
 }
 
-async function indelibleLabsSvgToRaster({ svg, imageSize, transparent }) {
+async function indelibleLabsSvgToRaster({
+  tokenId,
+  svg,
+  imageSize,
+  transparent,
+}) {
   const allLayers = getPngLayers(svg);
   const meta = await get1of1Meta(allLayers);
-  let image;
+
   if (meta.is1of1) {
     if (transparent) {
-      throw new Error("cannot generate transparent 1 or 1");
-    }
-    image = sharp(allLayers[0], { animated: meta.format === "gif" });
-    image = meta.format === "gif" ? image : image.toFormat("png");
-    if (imageSize !== meta.width) {
-      image = image.resize({
-        width: imageSize,
-        kernel: "nearest",
-      });
+      if (imageSize === 24) {
+        console.error(
+          `Warning: not generating ${tokenId}: Cannot re-generate manually-created 1/1 24x24-transparent images`
+        );
+        return [];
+      }
+      // I manually-created the transparent 1/1s because they don't have
+      // separate backgrounds in the source SVG images. So we create other sizes
+      // by just scaling the 24x24-transparent image, which is the 1px:1px size.
+      const images = [
+        sharp(
+          await fs.readFile(
+            path.resolve(
+              fileURLToPath(import.meta.url),
+              `../../24x24-transparent/${tokenId}.png`
+            )
+          )
+        ),
+      ];
+
+      // GIF 1/1s have two transparent versions - static PNG and animated GIF.
+      if (meta.format === "gif") {
+        images.push(
+          sharp(
+            await fs.readFile(
+              path.resolve(
+                fileURLToPath(import.meta.url),
+                `../../24x24-transparent/${tokenId}.gif`
+              )
+            ),
+            { animated: true }
+          )
+        );
+      }
+      return images.map((i) => resize(i, imageSize));
+    } else {
+      let image = sharp(allLayers[0], { animated: meta.format === "gif" });
+      if (meta.format !== "gif") {
+        image = image.toFormat("png").removeAlpha();
+      }
+      if (imageSize !== meta.width) {
+        image = resize(image, imageSize);
+      }
+      return [image];
     }
   } else {
     const usedLayers = transparent ? allLayers.slice(0, -1) : allLayers;
-    image = sharp(usedLayers[usedLayers.length - 1]).composite(
+    let image = sharp(usedLayers[usedLayers.length - 1]).composite(
       usedLayers
         .slice(0, -1)
         .reverse()
@@ -60,37 +103,48 @@ async function indelibleLabsSvgToRaster({ svg, imageSize, transparent }) {
     );
     if (imageSize !== meta.width) {
       // we can't resize a pipeline containing compose() because the resize is
-      // applied prior to compose(), so only the base layer is resized.
-      image = sharp(await image.toBuffer()).resize({
-        width: imageSize,
-        kernel: "nearest",
-      });
+      // applied prior to compose(), resulting in only the base layer being
+      // resized. So instead we have finalise the composition before resizing.
+      image = resize(sharp(await image.toBuffer()), imageSize);
     }
+    if (!transparent) {
+      image = image.removeAlpha();
+    }
+    return [image];
   }
-  if (!transparent) {
-    image = image.removeAlpha();
-  }
-  return {
-    format: (await image.metadata()).format,
-    image: await image.toBuffer(),
-  };
+}
+
+function resize(image, imageSize) {
+  return image.resize({
+    width: imageSize,
+    kernel: "nearest",
+  });
 }
 
 async function svgFileToRasterFile({
+  tokenId,
   srcSvgFile,
   destFileWithoutExtension,
   imageSize,
   transparent,
 }) {
   const svg = await fs.readFile(srcSvgFile, { encoding: "utf-8" });
-  const { image, format } = await indelibleLabsSvgToRaster({
+  const images = await indelibleLabsSvgToRaster({
+    tokenId,
     svg,
     imageSize,
     transparent,
   });
-  const path = `${destFileWithoutExtension}.${format}`;
-  await fs.writeFile(path, image);
-  return path;
+  const paths = await Promise.all(
+    images.map(async (image) => {
+      const format = (await image.metadata()).format;
+      const buf = await image.toBuffer();
+      const path = `${destFileWithoutExtension}.${format}`;
+      fs.writeFile(path, buf);
+      return path;
+    })
+  );
+  return paths;
 }
 
 async function main() {
@@ -99,7 +153,7 @@ async function main() {
     "Generate PNG files from NFT SVG files.",
     (cmd) => {
       cmd.positional("token-id", {
-        desc: "The token ID numbers to generate (e.g. 0 1 2). If none, generate all missing PNG files.",
+        desc: "The token ID numbers to generate (e.g. 0 1 2). Otherwise, generate all image files.",
         default: [],
       });
       cmd.option("image-size", {
@@ -130,33 +184,23 @@ async function main() {
     transparent ? "-transparent" : ""
   }`;
   await fs.mkdir(outDir, { recursive: true });
-  const existing = new Set(
-    await (await fs.readdir(outDir))
-      .filter((n) => /^\d+\.png$/.test(n))
-      .map((n) => /^(\d+)/.exec(n)[1])
-  );
-  let missing = tokenId.length
-    ? tokenId
-    : [
-        ...(await (await fs.readdir(svgDir))
-          .filter((n) => /^\d+\.svg$/.test(n))
-          .map((n) => /^(\d+)/.exec(n)[1])),
-      ].filter((n) => !existing.has(n));
+  let ids = tokenId.length ? tokenId : [...Array(MAX_SUPPLY).keys()];
 
-  console.error(`${missing.length} Images to generate`);
+  console.error(`${ids.length} EdgePunks to generate`);
   let error = false;
 
   const generate = async (tokenId) => {
     const srcSvgFile = path.join(svgDir, `${tokenId}.svg`);
     const destFileWithoutExtension = path.join(outDir, `${tokenId}`);
     try {
-      const path = await svgFileToRasterFile({
+      const paths = await svgFileToRasterFile({
+        tokenId,
         srcSvgFile,
         destFileWithoutExtension,
         imageSize,
         transparent,
       });
-      console.error(path);
+      console.error(paths.join(" "));
     } catch (e) {
       error = true;
       console.error(`Failed to generate image for token ID ${tokenId}:`, e);
@@ -165,7 +209,7 @@ async function main() {
 
   try {
     await await Promise.all(
-      missing.map((tokenId) => throttle(() => generate(tokenId)))
+      ids.map((tokenId) => throttle(() => generate(tokenId)))
     );
   } finally {
     process.exitCode = error;

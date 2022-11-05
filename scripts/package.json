@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "pull-data": "cd .. && node scripts/pull-on-chain-data.mjs"
+    "pull-data": "cd .. && node scripts/pull-on-chain-data.mjs",
+    "regenerate-all-images": "cd .. && node scripts/generate-images.mjs --image-size 24 && node scripts/generate-images.mjs --image-size 24 --transparent && node scripts/generate-images.mjs --image-size 192 && node scripts/generate-images.mjs --image-size 192 --transparent && node scripts/generate-images.mjs --image-size 480 && node scripts/generate-images.mjs --image-size 480 --transparent"
   },
   "dependencies": {},
   "devDependencies": {
